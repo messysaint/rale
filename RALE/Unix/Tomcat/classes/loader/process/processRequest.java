@@ -1,0 +1,258 @@
+package loader.process;
+
+import loader.util.*;
+import loader.*;
+
+import java.net.*;
+import java.io.*;
+import java.lang.Runtime;
+import java.util.*;
+import java.sql.*;
+import HTTPClient.*;
+//import encryptor.*;
+import javax.net.*;
+import javax.net.ssl.*;
+import java.security.*;
+
+
+public class processRequest extends Thread {
+    
+    final String CMD_UNWAR = "unwar";
+    final String CMD_DEPLOY_DUMMY = "dummy";
+    final String CMD_REMOVE_ARCHIVE = "remove";
+    final String CMD_START_APPLICATION = "start";
+    final String CMD_STOP_APPLICATION = "stop";
+    final String CMD_RELOAD_APPLICATION = "reload";
+    final String CMD_LIST_APPLICATIONS = "list";
+    final String CMD_GET_COMMON_LIB_PATH = "getcommonlibpath";
+    final String CMD_LIST_COMMON_LIBS = "listcommonlib";
+    final String CMD_LIST_COMMON_CLASSES = "listcommonclasses";
+    final String CMD_GET_COMMON_CLASSES_PATH = "getcommonclassespath";
+    final String CMD_GET_WEB_APPLICATION_DIR = "getwebapplicationdir";
+    final String CMD_DELETE_COMMON_LIB = "deletecommonlib";
+    final String CMD_DELETE_COMMON_CLASS = "deletecommonclass";
+    final String CMD_GET_PROTECTED_COMMON_LIB = "getprotectedcommonlib";
+    final String CMD_GET_SERVER_RESOURCE_FACTORY = "getServerResourceFactory";
+    final String CMD_GET_SERVER_RESOURCE_FACTORY_PATH = "getServerResourceFactoryPath";
+    final String CMD_BACKUP_SERVER_RESOURCE_FACTORY = "backupServerResourceFactory";
+    
+    // script exec
+    final String CMD_RUN_SERVER_SCRIPT = "runServerScript";
+    
+    Socket client;
+    BufferedReader is;
+    DataOutputStream os;
+    loader ldr;
+    
+    String[]  tokens;
+    
+    // constructor
+    public processRequest( loader l, Socket s) {
+        
+        ldr = l;
+        client = s;
+        
+        try {
+            is = new BufferedReader(new InputStreamReader(client.getInputStream()));
+            os = new DataOutputStream(client.getOutputStream());
+        } catch (IOException e) {
+            System.out.println("Exception: " + e.getMessage());
+        }
+        
+        this.start(); // Thread starts here...this start() will call run()
+        
+    }
+    
+    public void run() {
+        
+        try {
+            // get a request and parse it.
+            String returnMessage = new String();
+            
+            String request = is.readLine();
+            
+            System.out.println( '\n'+Calendar.getInstance().getTime().toString() );
+            //System.out.println( request.substring( request.indexOf( ' ' )) );
+            
+            tokens =  ldr.tokenize( request );
+            
+            // check authorization
+            String password = tokens[0];
+            String command = tokens[1];
+            String warFile = tokens[2];
+            
+            checkPass check = new checkPass( ldr.getPasswordDigest(), password);
+            
+            if( check.isValid() ) {
+                
+                ldr.setCommand( command );
+                ldr.setWarFile( warFile.trim().substring( 0, warFile.indexOf( '.' ) ) );
+                
+                // check if user want to run server script
+                if( ldr.getCommand().equalsIgnoreCase( CMD_RUN_SERVER_SCRIPT ) ) {
+                    
+                    // run server scipt here
+                    System.out.println( password + " " + command + " " + warFile );
+                    
+                } else {
+                    
+                    // Tomcat management commands
+                    if( ldr.getCommand().equalsIgnoreCase( CMD_DELETE_COMMON_LIB ) ) {
+                        ldr.setCommonLib( warFile );
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_DELETE_COMMON_CLASS ) ) {
+                        ldr.setCommonClass( warFile );
+                    }
+                    
+                    // remote unwar
+                    if( ldr.getCommand().equalsIgnoreCase( CMD_UNWAR ) ) {
+                        if ( ldr.backup() ) {
+                            returnMessage += "Backup web archive - Ok:";
+                            if ( ldr.createdir() ) {
+                                returnMessage += "Create directory - Ok:";
+                                if( ldr.copywar() ) {
+                                    returnMessage += "Copy war file - Ok:";
+                                    if( ldr.unwar() ) {
+                                        returnMessage += "Unwar web archive - Ok:";
+                                    } else {
+                                        returnMessage += "Unwar web archive - Error:";
+                                    }
+                                } else {
+                                    returnMessage += "Copy war file - Error:";
+                                }
+                            } else {
+                                returnMessage += "Create directory - Error:";
+                            }
+                        } else {
+                            returnMessage += "Backup web archive - Error:";
+                        }
+                        
+                        // create dummy archive
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_DEPLOY_DUMMY ) ) {
+                        
+                        if( !ldr.getWarFile().equalsIgnoreCase( "manager" ) ) {
+                            // remove current archive
+                            if( ldr.copydummy() ) {
+                                returnMessage += "Copy dummy archive - Ok:";
+                                if( ldr.createdir() ) {
+                                    returnMessage += "Create directory - Ok:";
+                                    if( ldr.copywar() ) {
+                                        returnMessage += "Copy war file - Ok:";
+                                        if( ldr.unwar() ) {
+                                            returnMessage = ldr.installArchive( ldr.getWarFile() );
+                                        } else {
+                                            returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                                        }
+                                    } else {
+                                        returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                                    }
+                                } else {
+                                    returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                                }
+                            } else {
+                                returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                            }
+                        } else {
+                            returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                        }
+                        
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_REMOVE_ARCHIVE ) ) {
+                        if( !ldr.getWarFile().equalsIgnoreCase( "manager" ) ) {
+                            returnMessage = ldr.tomcatRemoveArchive( ldr.getWarFile() );
+                        } else {
+                            returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                        }
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_START_APPLICATION ) ) {
+                        
+                        returnMessage = ldr.tomcatManagerAction( CMD_START_APPLICATION );
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_STOP_APPLICATION ) ) {
+                        
+                        returnMessage = ldr.tomcatManagerAction( CMD_STOP_APPLICATION );
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_RELOAD_APPLICATION ) ) {
+                        
+                        returnMessage = ldr.tomcatManagerAction( CMD_RELOAD_APPLICATION );
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_LIST_APPLICATIONS ) ) {
+                        
+                        returnMessage = ldr.tomcatManagerAction( CMD_LIST_APPLICATIONS );
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_GET_COMMON_LIB_PATH ) ) {
+                        
+                        returnMessage = ldr.getCommonLibPath();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_LIST_COMMON_LIBS ) ) {
+                        
+                        returnMessage = ldr.listCommonLib();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_GET_COMMON_CLASSES_PATH ) ) {
+                        
+                        returnMessage = ldr.getCommonClassesPath();
+                        
+                    }  else if( ldr.getCommand().equalsIgnoreCase( CMD_LIST_COMMON_CLASSES ) ) {
+                        
+                        returnMessage = ldr.listCommonClasses();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_GET_WEB_APPLICATION_DIR ) ) {
+                        
+                        returnMessage = ldr.getWebApplicationDir();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_DELETE_COMMON_LIB ) ) {
+                        
+                        returnMessage = ldr.deleteCommonLib();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_DELETE_COMMON_CLASS ) ) {
+                        
+                        returnMessage = ldr.deleteCommonClass();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_GET_SERVER_RESOURCE_FACTORY ) ) {
+                        
+                        returnMessage = ldr.getServerXml();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_GET_SERVER_RESOURCE_FACTORY_PATH ) ) {
+                        
+                        returnMessage = ldr.getServerXmlPath();
+                        
+                    } else if( ldr.getCommand().equalsIgnoreCase( CMD_BACKUP_SERVER_RESOURCE_FACTORY ) ) {
+                        
+                        if( ldr.backupServerXml() ) {
+                            returnMessage = "Ok - Backup Server Resource Factory";
+                        } else {
+                            returnMessage = "Error - Backup Server Resource Factory";
+                        }
+                        
+                    } else { // unknown command  ignore and loop
+                        
+                        returnMessage = "Error: unknown client command: " + ldr.getCommand();
+                        
+                    }
+                    
+                }
+                
+                
+                
+            } else {
+                returnMessage += "Password is not correct";
+            }
+            
+            //output.println( returnMessage );
+            os.writeBytes( returnMessage + "\n\n" );
+            os.flush();
+            
+            //System.out.println( "Return message: " + returnMessage );
+            
+            this.sleep( 10000 );
+            is.close();  // close input stream
+            os.close(); // close output stream
+            
+            // ------------------------------------------
+            client.close();
+            
+        } catch (Exception e) {
+            System.out.println("Exception: " + e.getMessage());
+        }
+    }
+    
+}
